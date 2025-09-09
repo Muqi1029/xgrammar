@@ -97,6 +97,7 @@ class LogitsProcessor(transformers.LogitsProcessor):
 
         for i in range(self.batch_size):
             if not self.matchers[i].is_terminated():
+                # FIXME(Muqi1029): fill next token bitmask
                 self.matchers[i].fill_next_token_bitmask(self.token_bitmask, i)
 
         # We only support masking logits on CUDA or CPU
