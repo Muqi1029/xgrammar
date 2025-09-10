@@ -1,0 +1,129 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "scene": {
+      "type": "integer",
+      "enum": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ]
+    },
+    "bossId": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "jobIds": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "bossIdGeekIdPairs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "bossId": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "geekId": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "bossId",
+          "geekId"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    }
+  },
+  "required": [
+    "scene"
+  ],
+  "oneOf": [
+    {
+      "properties": {
+        "scene": {
+          "const": 0
+        }
+      },
+      "required": [
+        "scene"
+      ],
+      "not": {
+        "required": [
+          "bossId",
+          "jobIds",
+          "bossIdGeekIdPairs"
+        ]
+      }
+    },
+    {
+      "properties": {
+        "scene": {
+          "const": 1
+        }
+      },
+      "required": [
+        "scene",
+        "bossId"
+      ]
+    },
+    {
+      "properties": {
+        "scene": {
+          "enum": [
+            2,
+            3,
+            4,
+            5,
+            6
+          ]
+        }
+      },
+      "required": [
+        "scene",
+        "jobIds"
+      ]
+    },
+    {
+      "properties": {
+        "scene": {
+          "const": 7
+        }
+      },
+      "required": [
+        "scene",
+        "bossId"
+      ]
+    },
+    {
+      "properties": {
+        "scene": {
+          "const": 8
+        }
+      },
+      "required": [
+        "scene",
+        "bossIdGeekIdPairs"
+      ]
+    }
+  ],
+  "additionalProperties": false
+}
