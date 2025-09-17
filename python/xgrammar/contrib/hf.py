@@ -68,9 +68,9 @@ class LogitsProcessor(transformers.LogitsProcessor):
         if len(self.matchers) == 0:
             self.batch_size = input_ids.shape[0]
             self.compiled_grammars = (
-                self.compiled_grammars
+                self.compiled_grammars # equal greater than 1 means it is equal to batch_size
                 if len(self.compiled_grammars) > 1
-                else self.compiled_grammars * self.batch_size
+                else self.compiled_grammars * self.batch_size # equal 1 means every sample in the batch requires the same compiled grammar
             )
             assert (
                 len(self.compiled_grammars) == self.batch_size

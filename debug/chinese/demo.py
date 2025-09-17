@@ -6,7 +6,7 @@ import os
 def pretty_title(title: str):
     print("\n" + f"\033[47;30m {title} \033[0m".center(100, "=") + "\n")
 # Setup
-model_id = os.environ["QWEN38B"]  # or any model with Chinese support
+model_id = os.environ["QWEN3_8B"]  # or any model with Chinese support
 tokenizer = AutoTokenizer.from_pretrained(model_id)
 config = AutoConfig.from_pretrained(model_id)
 full_vocab_size = config.vocab_size
