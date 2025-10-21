@@ -10,6 +10,8 @@
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -19,10 +21,12 @@
 #include "fsm.h"
 #include "grammar_functor.h"
 #include "grammar_impl.h"
+#include "support/dynamic_bitset.h"
 #include "support/logging.h"
 #include "support/thread_pool.h"
 #include "support/thread_safe_cache.h"
 #include "support/utils.h"
+#include "xgrammar/grammar.h"
 
 namespace xgrammar {
 
@@ -32,11 +36,17 @@ namespace xgrammar {
 class GrammarMatcherForTokenMaskCache : public EarleyParser {
  public:
   GrammarMatcherForTokenMaskCache(
-      const Grammar& grammar, const ParserState& init_state, const bool& need_expand = true
+      const Grammar& grammar,
+      const ParserState& init_state,
+      const std::unordered_map<int32_t, DynamicBitset>&
+          tag_dispatch_rule_id_to_second_slicing_bitset,
+      const bool& need_expand = true
   )
       : EarleyParser(grammar, init_state),
         init_rule_id(init_state.rule_id),
-        initial_state(init_state) {}
+        initial_state(init_state),
+        tag_dispatch_rule_id_to_second_slicing_bitset(tag_dispatch_rule_id_to_second_slicing_bitset
+        ) {}
   /*!
    * \brief Get the adaptive token mask for the given ParserState.
    * \param is_root_rule Whether to consider the parent rule. If false, there will be
@@ -86,6 +96,17 @@ class GrammarMatcherForTokenMaskCache : public EarleyParser {
 
   // The initial state of the parser.
   ParserState initial_state;
+
+  /*!
+   \brief This is a mapping from TagDispatch rule id to the bitset used for second slicing.
+   \note If a rule is a TagDispatch rule, then there will be an AC automaton for its triggers.
+    Which means that it can accept a lot of tokens. However, it will be slow to check a lot of
+    tokens. The DynamicBitset here is used to do a second slicing: if a token's substr(1, n - 1)
+    can be accepted by the start state of the AC automaton, then it will be True in the bitset.
+    When we check a token, we first check if its first character can transit to the start state.
+    If yes, then we check if it is in the bitset. If yes, then we accept it directly.
+  */
+  const std::unordered_map<int32_t, DynamicBitset>& tag_dispatch_rule_id_to_second_slicing_bitset;
 
   // Temporary data for GetAdaptiveTokenMask.
   std::vector<int32_t> tmp_accepted_indices_;
@@ -218,6 +239,27 @@ std::pair<bool, std::bitset<256>> GrammarMatcherForTokenMaskCache::GetSpeculativ
     const std::vector<std::pair<int32_t, std::string>>& sorted_decoded_vocab
 ) {
   using GrammarExprType = Grammar::Impl::GrammarExprType;
+  // If the initial rule is a tag dispatch, we will check if it can achieve its initial state.
+  const auto& rule = grammar_->GetRule(init_rule_id);
+  const auto& rule_body = grammar_->GetGrammarExpr(rule.body_expr_id);
+  if (rule_body.type == GrammarExprType::kTagDispatch) {
+    std::bitset<256> speculative_mask;
+    XGRAMMAR_DCHECK(grammar_->per_rule_fsms[init_rule_id].has_value());
+    const auto& fsm = grammar_->per_rule_fsms[init_rule_id].value();
+    for (const auto& edge : fsm.GetFsm().GetEdges(initial_state.element_id)) {
+      if (edge.target != fsm.GetStart()) {
+        continue;
+      }
+      if (!edge.IsCharRange()) {
+        continue;
+      }
+      for (int32_t ch = edge.min; ch <= edge.max; ++ch) {
+        speculative_mask.set(ch);
+      }
+    }
+    return {true, speculative_mask};
+  }
+
   // Check if the initial state is self-recursive-like. If the state is self-recursive-like,
   // and it covers a large part of the vocabulary, we will do speculative calculation in compiling.
   if (!grammar_->per_rule_fsms[init_rule_id].has_value()) {
@@ -317,6 +359,15 @@ bool GrammarMatcherForTokenMaskCache::GetTokenMaskWithFirstCharacterCheck(
   int prev_matched_size = 0;
   int last_rejected_range = 0;
   const bool& is_exact_lookahead = grammar_->GetRule(init_rule_id).is_exact_lookahead;
+  std::optional<const DynamicBitset*> definite_accepted_bitset = std::nullopt;
+  const bool is_tag_dispatch_rule =
+      grammar_->GetGrammarExpr(grammar_->GetRule(init_rule_id).body_expr_id).type ==
+      Grammar::Impl::GrammarExprType::kTagDispatch;
+  if (is_tag_dispatch_rule) {
+    XGRAMMAR_DCHECK(tag_dispatch_rule_id_to_second_slicing_bitset.count(init_rule_id) > 0);
+    definite_accepted_bitset = &tag_dispatch_rule_id_to_second_slicing_bitset.at(init_rule_id);
+  }
+
   const std::string* prev_token = nullptr;
   for (size_t interval_idx = 0; interval_idx < possible_intervals.size(); ++interval_idx) {
     const auto& interval = possible_intervals[interval_idx];
@@ -339,18 +390,35 @@ bool GrammarMatcherForTokenMaskCache::GetTokenMaskWithFirstCharacterCheck(
       const auto& token = sorted_decoded_vocab[i].second;
       // This optimization is useful for simple self-recursive rules, like string content.
       if (speculative_calculation) {
-        bool all_accepted = true;
-        for (char ch : token) {
-          // If the first character is not the ascii character or can't be accepted by the
-          // first character mask, we need to check them in the parser.
-          if (isascii(ch) == 0 || !speculative_mask[static_cast<uint8_t>(ch)]) {
-            all_accepted = false;
-            break;
+        // Optimization for tag dispatch rules.
+        if (definite_accepted_bitset.has_value()) {
+          // If the token is empty, it must be accepted.
+          if (token.empty()) {
+            tmp_accepted_indices_.push_back(i);
+            continue;
           }
-        }
-        if (all_accepted) {
-          tmp_accepted_indices_.push_back(i);
-          continue;
+          // If the token doesn't contain tags or stop strings since the second character, and it
+          // will transit to the start state after consuming the first character, it must be
+          // accepted.
+          if (speculative_mask[static_cast<uint8_t>(token[0])] &&
+              (*definite_accepted_bitset.value())[i]) {
+            tmp_accepted_indices_.push_back(i);
+            continue;
+          }
+        } else {
+          bool all_accepted = true;
+          for (char ch : token) {
+            // If the first character is not the ascii character or can't be accepted by the
+            // first character mask, we need to check them in the parser.
+            if (isascii(ch) == 0 || !speculative_mask[static_cast<uint8_t>(ch)]) {
+              all_accepted = false;
+              break;
+            }
+          }
+          if (all_accepted) {
+            tmp_accepted_indices_.push_back(i);
+            continue;
+          }
         }
       }
       // Many tokens may contain the same prefix, so we will avoid unnecessary matching
@@ -573,20 +641,61 @@ class GrammarCompilerNoCache {
   const TokenizerInfo tokenizer_info_;
   /*! \brief The maximum number of threads to use. */
   const int max_threads_;
+  /*! \brief Mapping from the rule_id to the definite accepted token mask. */
+  std::unordered_map<int32_t, DynamicBitset> tag_dispatch_rule_id_to_second_slicing_bitset;
 };
 
-CompiledGrammar GrammarCompilerNoCache::MultiThreadCompileGrammar(Grammar grammar) {
+CompiledGrammar GrammarCompilerNoCache::MultiThreadCompileGrammar(Grammar grammar_unoptimized) {
   using GrammarExprType = Grammar::Impl::GrammarExprType;
 
   auto compiled_grammar_impl = std::make_shared<CompiledGrammar::Impl>();
 
-  compiled_grammar_impl->grammar = grammar;
+  compiled_grammar_impl->grammar = GrammarOptimizer::Apply(grammar_unoptimized);
   compiled_grammar_impl->tokenizer_info = tokenizer_info_;
-  grammar->allow_empty_rule_ids = AllowEmptyRuleAnalyzer::Apply(compiled_grammar_impl->grammar);
-  RepetitionNormalizer::Apply(&compiled_grammar_impl->grammar);
-  GrammarFSMBuilder::Apply(&compiled_grammar_impl->grammar);
   if (tokenizer_info_.GetVocabSize() == 0) {
     return CompiledGrammar(compiled_grammar_impl);
+  }
+
+  // Optimization for TagDispatch: Precompute the definitely accepted tokens.
+  for (int i = 0; i < compiled_grammar_impl->grammar->NumRules(); i++) {
+    const auto& rule = compiled_grammar_impl->grammar->GetRule(i);
+    const auto& rule_body = compiled_grammar_impl->grammar->GetGrammarExpr(rule.body_expr_id);
+    if (rule_body.type != GrammarExprType::kTagDispatch) {
+      continue;
+    }
+    XGRAMMAR_DCHECK(rule_body.type == GrammarExprType::kTagDispatch);
+    Grammar::Impl::TagDispatch tag_dispatch =
+        compiled_grammar_impl->grammar->GetTagDispatch(rule.body_expr_id);
+    const auto& sorted_decoded_vocab = tokenizer_info_.GetSortedDecodedVocab();
+    DynamicBitset definite_accepted_tokens_since_second_char(sorted_decoded_vocab.size());
+    for (int i = 0; i < static_cast<int32_t>(sorted_decoded_vocab.size()); i++) {
+      bool definite_accept_since_second_char = true;
+      const auto& token = sorted_decoded_vocab[i].second;
+      if (token.empty()) {
+        definite_accepted_tokens_since_second_char.Set(i);
+        continue;
+      }
+
+      // Check if the token contains any tag or stop string after the first character.
+      for (const auto& tag : tag_dispatch.tag_rule_pairs) {
+        if (token.find(tag.first, 1) != std::string::npos) {
+          definite_accept_since_second_char = false;
+          break;
+        }
+      }
+      for (const auto& stop_str : tag_dispatch.stop_str) {
+        if (token.find(stop_str, 1) != std::string::npos) {
+          definite_accept_since_second_char = false;
+          break;
+        }
+      }
+
+      // If the token can be definitely accepted since the second character, set the bit.
+      if (definite_accept_since_second_char) {
+        definite_accepted_tokens_since_second_char.Set(i);
+      }
+    }
+    tag_dispatch_rule_id_to_second_slicing_bitset[i] = definite_accepted_tokens_since_second_char;
   }
   // Step 3. Compute the adaptive token mask cache
   // The token mask cache is computed for these positions in the grammar:
@@ -599,14 +708,15 @@ CompiledGrammar GrammarCompilerNoCache::MultiThreadCompileGrammar(Grammar gramma
   // not need ThreadPool or std::mutex, which throws error in runtime in WebAssembly.
   std::optional<ThreadPool> thread_pool;
   std::optional<std::mutex> adaptive_token_mask_cache_mutex;
-
   if (max_threads_ > 1) {
     thread_pool.emplace(max_threads_);
     adaptive_token_mask_cache_mutex.emplace();
   }
 
   auto add_adaptive_token_mask = [&](const ParserState& state, bool is_root_rule) {
-    auto grammar_matcher = GrammarMatcherForTokenMaskCache(grammar, state, false);
+    auto grammar_matcher = GrammarMatcherForTokenMaskCache(
+        compiled_grammar_impl->grammar, state, tag_dispatch_rule_id_to_second_slicing_bitset, false
+    );
     auto cur_adaptive_token_mask_cache = grammar_matcher.GetAdaptiveTokenMask(
         tokenizer_info_.GetVocabSize(),
         tokenizer_info_.GetSortedDecodedVocab(),
@@ -632,12 +742,13 @@ CompiledGrammar GrammarCompilerNoCache::MultiThreadCompileGrammar(Grammar gramma
     }
   };
 
-  auto root_rule_id = grammar->GetRootRuleId();
+  auto root_rule_id = compiled_grammar_impl->grammar->GetRootRuleId();
 
-  for (int32_t rule_id = 0; rule_id < static_cast<int>(grammar->NumRules()); ++rule_id) {
-    auto rule = grammar->GetRule(rule_id);
-    auto rule_body = grammar->GetGrammarExpr(rule.body_expr_id);
-    const auto& rule_fsm = grammar->per_rule_fsms[rule_id];
+  for (int32_t rule_id = 0; rule_id < static_cast<int>(compiled_grammar_impl->grammar->NumRules());
+       ++rule_id) {
+    auto rule = compiled_grammar_impl->grammar->GetRule(rule_id);
+    auto rule_body = compiled_grammar_impl->grammar->GetGrammarExpr(rule.body_expr_id);
+    const auto& rule_fsm = compiled_grammar_impl->grammar->per_rule_fsms[rule_id];
     if (rule_fsm.has_value()) {
       auto cur_stack_element =
           ParserState(rule_id, rule.body_expr_id, 0, ParserState::kNoPrevInputPos, 0);
@@ -654,7 +765,7 @@ CompiledGrammar GrammarCompilerNoCache::MultiThreadCompileGrammar(Grammar gramma
     }
     XGRAMMAR_DCHECK(rule_body.type == GrammarExprType::kChoices);
     for (auto sequence_id : rule_body) {
-      const auto& sequence = grammar->GetGrammarExpr(sequence_id);
+      const auto& sequence = compiled_grammar_impl->grammar->GetGrammarExpr(sequence_id);
       if (sequence.type == GrammarExprType::kEmptyStr) {
         continue;
       }
@@ -662,7 +773,7 @@ CompiledGrammar GrammarCompilerNoCache::MultiThreadCompileGrammar(Grammar gramma
       auto state = ParserState(rule_id, sequence_id, 0, ParserState::kNoPrevInputPos, 0);
       for (int element_id = 0; element_id < sequence.size(); ++element_id) {
         state.element_id = element_id;
-        auto element = grammar->GetGrammarExpr(sequence[element_id]);
+        auto element = compiled_grammar_impl->grammar->GetGrammarExpr(sequence[element_id]);
         if (element.type == GrammarExprType::kRuleRef || element.type == GrammarExprType::kRepeat) {
           continue;
         }

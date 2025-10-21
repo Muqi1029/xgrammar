@@ -15,6 +15,7 @@ from .exception import (
 )
 from .grammar import Grammar, StructuralTagItem
 from .matcher import (
+    BatchGrammarMatcher,
     GrammarMatcher,
     allocate_token_bitmask,
     apply_token_bitmask_inplace,
@@ -22,4 +23,5 @@ from .matcher import (
     get_bitmask_shape,
     reset_token_bitmask,
 )
+from .structural_tag import StructuralTag
 from .tokenizer_info import TokenizerInfo, VocabType
