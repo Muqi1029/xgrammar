@@ -1,0 +1,45 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "additionalproperties": false,
+    "required": [
+      "column",
+      "name",
+      "sql",
+      "sql_description"
+    ],
+    "properties": {
+      "column": {
+        "type": "array",
+        "minitems": 1,
+        "items": {
+          "type": "string",
+          "pattern": "^[a-za-z_][a-za-z0-9_]*\\.[a-za-z_][a-za-z0-9_]*$"
+        },
+        "description": "字段所在的表和列名，例如 biz_income_daily.online_income"
+      },
+      "name": {
+        "type": "array",
+        "minitems": 1,
+        "items": {
+          "type": "string"
+        },
+        "description": "与 column 对应的中文字段名"
+      },
+      "sql": {
+        "type": "array",
+        "minitems": 1,
+        "items": {
+          "type": "string"
+        },
+        "description": "一条或多条 sql 查询语句，可包含占位符如 {yesterday}"
+      },
+      "sql_description": {
+        "type": "string",
+        "description": "对 sql 查询用途的中文描述"
+      }
+    }
+  }
+}
