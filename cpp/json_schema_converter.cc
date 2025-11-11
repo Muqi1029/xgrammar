@@ -2332,6 +2332,7 @@ std::string JSONSchemaConverter::GetPropertyPattern(
       CreateRuleFromSchema(prop_schema, rule_name + "_prop_" + std::to_string(idx), json_format);
   switch (json_format) {
     case JSONFormat::kJSON: {
+      std::cout << "create key: [" + key + " " + colon_pattern_ + " " + value + "]" << std::endl;
       return key + " " + colon_pattern_ + " " + value;
     }
     case JSONFormat::kXML: {
@@ -2500,7 +2501,7 @@ std::string JSONSchemaConverter::GetPartialRuleForProperties(
     // add separators and the empty string option
     res = first_sep + " (" + res + ") " + last_sep;
   } else if (max_properties == -1) {
-    // Case 2. With constrain on the lower bound of the properties number
+    // Case 2. With constraint on the lower bound of the properties number
     int properties_size = static_cast<int>(properties.size());
     std::vector<std::vector<std::string>> rule_names(properties_size, std::vector<std::string>());
     std::vector<int> key_matched_min(properties_size, 0);
@@ -3257,7 +3258,7 @@ std::string JSONSchemaConverter::VisitObject(
 
   if (object_spec.pattern_properties.size() > 0 ||
       !object_spec.property_names.is<picojson::null>()) {
-    // Case 1: patternProperties or propertyNames is difined
+    // Case 1: patternProperties or propertyNames is defined
     // TODO: Here we only handle the case that additionalProperties=False
     // TODO: The coexistence of properties, required, etc. has not been addressed yet,
     // as it may cause schema conflicts

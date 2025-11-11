@@ -23,5 +23,5 @@ tools = [
 if __name__ == "__main__":
     print(" ENBF ".center(80, "="))
     ebnf = Grammar.from_json_schema(
-        json.dumps(tools[0]["function"]["parameters"]), print_converted_ebnf=True
+        json.dumps(tools[0]["function"]["parameters"]), print_converted_ebnf=True, strict_mode=False
     )
