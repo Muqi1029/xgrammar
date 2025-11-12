@@ -15,6 +15,7 @@ tools = [
                     "time": {"type": "string", "description": "The current time", "format": "date"},
                     "timezone": {"type": "string", "description": "The timezone"},
                 },
+                "required": [],
             },
             "strict": True,
         },
