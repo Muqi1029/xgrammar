@@ -2332,7 +2332,8 @@ std::string JSONSchemaConverter::GetPropertyPattern(
       CreateRuleFromSchema(prop_schema, rule_name + "_prop_" + std::to_string(idx), json_format);
   switch (json_format) {
     case JSONFormat::kJSON: {
-      std::cout << "create key: [" + key + " " + colon_pattern_ + " " + value + "]" << std::endl;
+      std::cout << "create key: [" + key + "] [" + colon_pattern_ + "] [" + value + "]"
+                << std::endl;
       return key + " " + colon_pattern_ + " " + value;
     }
     case JSONFormat::kXML: {
@@ -2465,13 +2466,23 @@ std::string JSONSchemaConverter::GetPartialRuleForProperties(
       rule_names.back() = "\"\"";
     }
 
-    // construct 0~(len(properties) - 2) rules
+    // construct (len(properties) - 1) rules
     for (int i = properties.size() - 2; i >= 0; --i) {
       const std::string& prop_pattern = prop_patterns[i + 1];
       const std::string& last_rule_name = rule_names[i + 1];
-      std::string cur_rule_body = mid_sep + " " + prop_pattern + " " + last_rule_name;
+      std::string cur_rule_body = "";
+      if (last_rule_name != "\"\"") {
+        cur_rule_body = prop_pattern + " " + mid_sep + " " + last_rule_name + " | " +
+                        last_rule_name + " " + mid_sep + " " + prop_pattern;
+      } else {
+        cur_rule_body = prop_pattern;
+      }
       if (!required.count(properties[i + 1].first)) {
-        cur_rule_body = last_rule_name + " | " + cur_rule_body;
+        if (last_rule_name != "\"\"") {
+          cur_rule_body = last_rule_name + " | ( " + cur_rule_body + " | \"\" )";
+        } else {
+          cur_rule_body = prop_pattern;
+        }
       } else {
         is_required[i + 1] = true;
       }
@@ -2842,6 +2853,7 @@ Result<JSONSchemaConverter::ObjectSpec, SchemaError> JSONSchemaConverter::ParseO
     }
     auto properties_obj = schema.at("properties").get<picojson::object>();
     for (const auto& key : properties_obj.ordered_keys()) {
+      // get keys here
       properties.push_back({key, properties_obj.at(key)});
     }
   }
