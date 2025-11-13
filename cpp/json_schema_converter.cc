@@ -2470,19 +2470,9 @@ std::string JSONSchemaConverter::GetPartialRuleForProperties(
     for (int i = properties.size() - 2; i >= 0; --i) {
       const std::string& prop_pattern = prop_patterns[i + 1];
       const std::string& last_rule_name = rule_names[i + 1];
-      std::string cur_rule_body = "";
-      if (last_rule_name != "\"\"") {
-        cur_rule_body = prop_pattern + " " + mid_sep + " " + last_rule_name + " | " +
-                        last_rule_name + " " + mid_sep + " " + prop_pattern;
-      } else {
-        cur_rule_body = prop_pattern;
-      }
+      std::string cur_rule_body = mid_sep + " " + prop_pattern + " " + last_rule_name;
       if (!required.count(properties[i + 1].first)) {
-        if (last_rule_name != "\"\"") {
-          cur_rule_body = last_rule_name + " | ( " + cur_rule_body + " | \"\" )";
-        } else {
-          cur_rule_body = prop_pattern;
-        }
+        cur_rule_body = last_rule_name + " | " + cur_rule_body;
       } else {
         is_required[i + 1] = true;
       }
@@ -2496,6 +2486,43 @@ std::string JSONSchemaConverter::GetPartialRuleForProperties(
 
     // construct the root rule
     for (int i = 0; i < static_cast<int>(properties.size()); ++i) {
+      if (i != 0) {
+        res += " | ";
+      }
+      res += "(" + prop_patterns[i] + " " + rule_names[i] + ")";
+      if (is_required[i]) {
+        break;
+      }
+    }
+
+    res += " | ";
+    std::vector<std::pair<std::string, picojson::value>> reversed_properties;
+    reversed_properties.reserve(properties.size());
+    std::reverse_copy(
+        properties.begin(), properties.end(), std::back_inserter(reversed_properties)
+    );
+    std::reverse(prop_patterns.begin(), prop_patterns.end());
+    rule_names.assign(properties.size() - 1, "");
+    is_required.assign(properties.size(), false);
+    for (int i = properties.size() - 2; i >= 0; --i) {
+      const std::string& prop_pattern = prop_patterns[i + 1];
+      const std::string& last_rule_name = rule_names[i + 1];
+      std::string cur_rule_body = mid_sep + " " + prop_pattern + " " + last_rule_name;
+      if (!required.count(reversed_properties[i + 1].first)) {
+        cur_rule_body = last_rule_name + " | " + cur_rule_body;
+      } else {
+        is_required[i + 1] = true;
+      }
+      std::string cur_rule_name = rule_name + "_part_" + std::to_string(i);
+      cur_rule_name = ebnf_script_creator_.AddRule(cur_rule_name, cur_rule_body);
+      rule_names[i] = cur_rule_name;
+    }
+    if (required.count(reversed_properties[0].first)) {
+      is_required[0] = true;
+    }
+
+    // construct the root rule
+    for (int i = 0; i < static_cast<int>(reversed_properties.size()); ++i) {
       if (i != 0) {
         res += " | ";
       }
