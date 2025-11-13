@@ -2332,8 +2332,6 @@ std::string JSONSchemaConverter::GetPropertyPattern(
       CreateRuleFromSchema(prop_schema, rule_name + "_prop_" + std::to_string(idx), json_format);
   switch (json_format) {
     case JSONFormat::kJSON: {
-      std::cout << "create key: [" + key + "] [" + colon_pattern_ + "] [" + value + "]"
-                << std::endl;
       return key + " " + colon_pattern_ + " " + value;
     }
     case JSONFormat::kXML: {
