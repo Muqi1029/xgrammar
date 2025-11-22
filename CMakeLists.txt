@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.18)
 project(xgrammar LANGUAGES CXX)
 
+# include config file
 if(EXISTS ${CMAKE_BINARY_DIR}/config.cmake)
   message(STATUS "Config file: ${CMAKE_BINARY_DIR}/config.cmake")
   include(${CMAKE_BINARY_DIR}/config.cmake)
@@ -22,15 +23,18 @@ option(XGRAMMAR_ENABLE_CPPTRACE
 option(XGRAMMAR_ENABLE_COVERAGE "Enable code coverage with gcov" OFF)
 option(XGRAMMAR_ENABLE_INTERNAL_CHECK "Enable internal checks" OFF)
 
+# set cache variable whose type is STRING)
 set(XGRAMMAR_CUDA_ARCHITECTURES
     native
     CACHE STRING "CUDA architectures"
 )
 
+# set CXX standard
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# CMAKE_BUILD_TYPE is OFF by default
 if(NOT CMAKE_BUILD_TYPE)
   message(STATUS "No build type specified; defaulting to CMAKE_BUILD_TYPE=RelWithDebugInfo.")
   set(CMAKE_BUILD_TYPE
@@ -67,10 +71,14 @@ set(XGRAMMAR_INCLUDE_PATH ${PROJECT_SOURCE_DIR}/3rdparty/picojson
                           ${PROJECT_SOURCE_DIR}/3rdparty/dlpack/include
 )
 
-file(GLOB_RECURSE XGRAMMAR_SOURCES_PATH "${PROJECT_SOURCE_DIR}/cpp/*.cc")
+# find all source cpp files in the cpp/
+file(GLOB_RECURSE XGRAMMAR_SOURCES_PATH CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/cpp/*.cc")
+# filter nanobind
 list(FILTER XGRAMMAR_SOURCES_PATH EXCLUDE REGEX "${PROJECT_SOURCE_DIR}/cpp/nanobind/.*\\.cc")
 
+# add static library
 add_library(xgrammar STATIC ${XGRAMMAR_SOURCES_PATH})
+# add include searching directories
 target_include_directories(xgrammar PUBLIC include)
 target_include_directories(xgrammar SYSTEM PUBLIC ${XGRAMMAR_INCLUDE_PATH})
 
