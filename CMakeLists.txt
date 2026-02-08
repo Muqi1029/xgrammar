@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.18)
 project(xgrammar LANGUAGES CXX)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # include config file
 if(EXISTS ${CMAKE_BINARY_DIR}/config.cmake)
   message(STATUS "Config file: ${CMAKE_BINARY_DIR}/config.cmake")
