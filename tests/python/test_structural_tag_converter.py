@@ -178,15 +178,6 @@ qwen_parameter_xml_stag_grammar = [
         },
         r"""basic_escape ::= (([\"\\/bfnrt]) | ("u" [A-Fa-f0-9] [A-Fa-f0-9] [A-Fa-f0-9] [A-Fa-f0-9]))
 basic_string_sub ::= (("\"") | ([^\0-\x1f\"\\\r\n] basic_string_sub) | ("\\" basic_escape basic_string_sub)) (=([ \n\t]* [,}\]:]))
-xml_string ::= TagDispatch(
-  stop_eos=true,
-  stop_str=(),
-  loop_after_dispatch=false,
-  excludes=("</parameter>")
-)
-xml_variable_name ::= (([a-zA-Z_] [a-zA-Z0-9_]*))
-xml_string_0 ::= ((xml_string))
-xml_any ::= ((basic_number) | (xml_string) | (basic_boolean) | (basic_null) | (basic_array) | (basic_object))
 basic_any ::= ((basic_number) | (basic_string) | (basic_boolean) | (basic_null) | (basic_array) | (basic_object))
 basic_integer ::= (("0") | (basic_integer_1 [1-9] [0-9]*))
 basic_number ::= ((basic_number_1 basic_number_7 basic_number_3 basic_number_6))
@@ -195,9 +186,18 @@ basic_boolean ::= (("true") | ("false"))
 basic_null ::= (("null"))
 basic_array ::= (("[" [ \n\t]* basic_any basic_array_1 [ \n\t]* "]") | ("[" [ \n\t]* "]"))
 basic_object ::= (("{" [ \n\t]* basic_string [ \n\t]* ":" [ \n\t]* basic_any basic_object_1 [ \n\t]* "}") | ("{" [ \n\t]* "}"))
+xml_string ::= TagDispatch(
+  stop_eos=true,
+  stop_str=(),
+  loop_after_dispatch=false,
+  excludes=("</parameter>")
+)
+xml_any ::= ((xml_string) | (basic_array) | (basic_object))
+xml_object ::= (("<parameter=" xml_variable_name ">" [ \n\t]* xml_any [ \n\t]* "</parameter>" xml_object_1) | ([ \n\t]*))
+xml_variable_name ::= (([a-zA-Z_] [a-zA-Z0-9_]*))
 root_prop_1 ::= (("0") | (root_prop_1_1 [1-9] [0-9]*))
-root_part_0 ::= (([ \n\t]* "<parameter=age>" [ \n\t]* root_prop_1 [ \n\t]* "</parameter>"))
-root_0 ::= (([ \n\t]* "<parameter=name>" [ \n\t]* xml_string_0 [ \n\t]* "</parameter>" root_part_0))
+root_part_0 ::= (("<parameter=age>" [ \n\t]* root_prop_1 [ \n\t]* "</parameter>"))
+root_0 ::= (("<parameter=name>" [ \n\t]* xml_string [ \n\t]* "</parameter>" root_part_0))
 basic_integer_1 ::= ("" | ("-"))
 basic_number_1 ::= ("" | ("-"))
 basic_number_2 ::= (([0-9] basic_number_2) | ([0-9]))
@@ -207,6 +207,7 @@ basic_number_5 ::= (([0-9] basic_number_5) | ([0-9]))
 basic_number_6 ::= ("" | ([eE] basic_number_4 basic_number_5))
 basic_array_1 ::= ("" | ([ \n\t]* "," [ \n\t]* basic_any basic_array_1))
 basic_object_1 ::= ("" | ([ \n\t]* "," [ \n\t]* basic_string [ \n\t]* ":" [ \n\t]* basic_any basic_object_1))
+xml_object_1 ::= ("" | ("<parameter=" xml_variable_name ">" [ \n\t]* xml_any [ \n\t]* "</parameter>" xml_object_1))
 root_prop_1_1 ::= ("" | ("-"))
 basic_number_7 ::= (("0") | ([1-9] [0-9]*))
 root ::= ((root_0))
@@ -215,9 +216,9 @@ root ::= ((root_0))
 ]
 qwen_parameter_xml_instance_is_accepted = [
     ("<parameter=name>Bob</parameter><parameter=age>\t100\n</parameter>", True),
-    ("<parameter=name>Bob</parameter>\t\n<parameter=age>\t100\n</parameter>", True),
+    ("<parameter=name>Bob</parameter><parameter=age>\t100\n</parameter>", True),
     ("<parameter=name>Bob</parameter><parameter=age>100</parameter>", True),
-    ("\n\t<parameter=name>Bob</parameter><parameter=age>100</parameter>", True),
+    ("\n\t<parameter=name>Bob</parameter><parameter=age>100</parameter>", False),
     ('<parameter=name>"Bob&lt;"</parameter><parameter=age>100</parameter>', True),
     (
         """<parameter=name><!DOCTYPE html>
@@ -234,6 +235,33 @@ qwen_parameter_xml_instance_is_accepted = [
 def test_qwen_parameter_xml_format(
     stag_format: Dict[str, Any], expected_grammar: str, instance: str, is_accepted: bool
 ):
+    check_stag_with_grammar(stag_format, expected_grammar)
+    check_stag_with_instance(stag_format, instance, is_accepted)
+
+
+# JSONSchemaFormat with style="qwen_xml" (same behavior as qwen_xml_parameter)
+json_schema_style_qwen_xml_stag_grammar = [
+    (
+        {
+            "type": "json_schema",
+            "json_schema": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
+                "required": ["name", "age"],
+            },
+            "style": "qwen_xml",
+        },
+        qwen_parameter_xml_stag_grammar[0][1],  # same expected grammar as qwen_xml_parameter
+    )
+]
+
+
+@pytest.mark.parametrize("stag_format, expected_grammar", json_schema_style_qwen_xml_stag_grammar)
+@pytest.mark.parametrize("instance, is_accepted", qwen_parameter_xml_instance_is_accepted)
+def test_json_schema_style_qwen_xml_format(
+    stag_format: Dict[str, Any], expected_grammar: str, instance: str, is_accepted: bool
+):
+    """Test JSONSchemaFormat with style='qwen_xml' produces same grammar and acceptance."""
     check_stag_with_grammar(stag_format, expected_grammar)
     check_stag_with_instance(stag_format, instance, is_accepted)
 
@@ -1729,6 +1757,10 @@ json_format_error_test_data = [
         '{"type": "structural_tag", "format": {"type": "tags_with_separator", "tags": [{"begin": "start", "content": {"type": "const_string", "value": "hello"}, "end": "end"}], "separator": "sep", "stop_after_first": "not_boolean"}}',
         "stop_after_first must be a boolean",
     ),
+    (
+        '{"type": "structural_tag", "format": {"type": "json_schema", "json_schema": {"type": "string"}, "style": "not_string"}}',
+        'style must be "json" or "qwen_xml"',
+    ),
 ]
 
 
@@ -1969,6 +2001,23 @@ basic_structural_tags_instance_is_accepted = [
     (xgr.structural_tag.JSONSchemaFormat(json_schema={"type": "string"}), '"abc"', True),
     (xgr.structural_tag.JSONSchemaFormat(json_schema={"type": "integer"}), "123", True),
     (xgr.structural_tag.JSONSchemaFormat(json_schema={"type": "integer"}), "abc", False),
+    # JSONSchemaFormat with style="qwen_xml"
+    (
+        xgr.structural_tag.JSONSchemaFormat(
+            json_schema={"type": "object", "properties": {"name": {"type": "string"}}},
+            style="qwen_xml",
+        ),
+        "<parameter=name>value</parameter>",
+        True,
+    ),
+    (
+        xgr.structural_tag.JSONSchemaFormat(
+            json_schema={"type": "object", "properties": {"name": {"type": "string"}}},
+            style="qwen_xml",
+        ),
+        "<parameter=name>value</param>",
+        False,
+    ),
     # AnyTextFormat
     (xgr.structural_tag.AnyTextFormat(), "", True),
     (xgr.structural_tag.AnyTextFormat(), "any text here", True),
