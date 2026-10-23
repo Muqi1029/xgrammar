@@ -73,8 +73,10 @@ struct AdaptiveTokenMask {
    * repetition on its last byte. Such a token is legal exactly when the repetitions it consumes
    * fit the budget and, with those before it, reach the lower bound of the repetition.
    *
-   * These tokens are removed from the mask's own accepted and uncertain classes, and the mask
-   * lists its accepted tokens explicitly, so a token that does not fit is rejected by this state.
+   * Budget-decided tokens are removed from the mask's own accepted and uncertain classes.
+   * Tokens that can also start a delimiter stay uncertain as well: fitting the budget accepts
+   * them without replay, while exceeding it still allows the runtime to check an early exit.
+   * The mask lists its static accepted tokens explicitly so it cannot bypass the budget.
    * Only body rules found by the eligibility analysis in PopulateRepeatInteriorBitsets get them.
    *
    * This is derived data: it is deliberately not part of the serialized form (see

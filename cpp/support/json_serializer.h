@@ -63,7 +63,9 @@ class SerializeVersion {
    * \brief The current serialization version. When the serialization result of any object in
    * XGrammar is changed, this version should be bumped.
    */
-  static constexpr const char kXGrammarSerializeVersion[] = "v18";
+  // XML counted-body masks need the overlapping-delimiter budget fast path when rebuilt.
+  // Older runtimes would not restore the tokens removed from the serialized static masks.
+  static constexpr const char kXGrammarSerializeVersion[] = "v19";
 };
 
 /*!

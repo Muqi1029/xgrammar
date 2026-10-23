@@ -117,10 +117,10 @@ struct RepetitionFollowBytes {
  *
  * A rule qualifies when it matches one codepoint of a character class (IsPlainCharacterClassRule)
  * and every reference to it is a repeat edge that is followed, in the referring rule, only by
- * character edges whose bytes no codepoint of the class starts with. Then a token that starts
- * inside the class stays in the repetition up to its first byte outside the class and cannot leave
- * it earlier, so its legality depends only on the repetition bounds and the repetitions done in
- * the parent: see PopulateRepeatInteriorBitsets.
+ * character edges. A token without a possible follow byte cannot leave the repetition early,
+ * so its legality depends only on the repetition bounds and the repetitions done in the parent.
+ * When the class and the follow bytes overlap (XML raw strings), tokens containing such a byte
+ * can still fit inside the body; otherwise the matcher replays them to check an early exit.
  *
  * \return For each rule, the bytes that can follow its repetitions, or nullopt when the rule does
  * not qualify.
@@ -186,8 +186,13 @@ std::vector<std::optional<RepetitionFollowBytes>> FindCountedRepetitionBodies(co
             bytes.set(byte);
           }
         }
-        if ((bytes & *first_bytes[body_rule_id]).any()) {
-          disqualified[body_rule_id] = true;
+        // Overlapping ASCII delimiters can be recognized at codepoint boundaries. Keep
+        // non-ASCII overlap on the generic path because a delimiter might share only a
+        // leading byte with a codepoint of the body.
+        for (int byte = 0x80; byte < 256; ++byte) {
+          if (bytes[byte] && (*first_bytes[body_rule_id])[byte]) {
+            disqualified[body_rule_id] = true;
+          }
         }
         follow_bytes[body_rule_id].under_all &= bytes;
         follow_bytes[body_rule_id].under_any |= bytes;
@@ -213,6 +218,9 @@ struct RepetitionTokenClass {
   enum Kind {
     // Legal exactly when the budget left covers `num_repetitions`.
     kBudget,
+    // Fits inside the body when the budget covers it, but may also leave it early. Replay
+    // only when the budget is insufficient, rather than replaying on every mask fill.
+    kBudgetOrReplay,
     // Leaves the repetition on its last byte: legal exactly when the budget left covers
     // `num_repetitions` and they complete the lower bound.
     kExit,
@@ -228,12 +236,12 @@ struct RepetitionTokenClass {
 /*!
  * \brief Classify `token` in the start state of a counted-repetition body rule whose FSM is `fsm`.
  *
- * A token stays inside the class until its first byte outside it. It cannot leave earlier because
- * no follow byte starts a codepoint of the class (FindCountedRepetitionBodies), and it cannot
+ * A token without a follow byte stays inside the class until its first byte outside it, and cannot
  * leave inside a codepoint. So it is decided by the repetition bounds alone when it ends inside the
  * class, or when it leaves on its last byte and every reference accepts that byte. It is rejected
  * when the byte it stops at can neither continue the codepoint nor follow the repetition, or when
- * it needs more repetitions than any reference allows.
+ * it needs more repetitions than any reference allows and has no possible early exit. An
+ * overlapping delimiter leaves a replay fallback when the token would exceed the budget.
  */
 RepetitionTokenClass ClassifyRepetitionToken(
     const CompactFSMWithStartEnd& fsm,
@@ -242,10 +250,19 @@ RepetitionTokenClass ClassifyRepetitionToken(
 ) {
   int32_t num_repetitions = 0;
   int state = fsm.GetStart();
+  bool may_exit_early = false;
   for (size_t i = 0; i < token.size(); ++i) {
     const auto byte = static_cast<uint8_t>(token[i]);
     const int next_state = NextStateOnByte(fsm.GetFsm(), state, byte);
+    if (state == fsm.GetStart() && next_state != -1 && follow_bytes.under_any[byte]) {
+      // Consuming the entire token as body text is sufficient to accept it when it fits.
+      // If it does not fit, the matcher must still consider an earlier closing tag.
+      may_exit_early = true;
+    }
     if (next_state == -1) {
+      if (may_exit_early) {
+        return {RepetitionTokenClass::kUndecided};
+      }
       if (state != fsm.GetStart() || num_repetitions == 0 || !follow_bytes.under_any[byte]) {
         return {RepetitionTokenClass::kRejected};
       }
@@ -260,7 +277,9 @@ RepetitionTokenClass ClassifyRepetitionToken(
       ++num_repetitions;
       state = fsm.GetStart();
       if (num_repetitions > follow_bytes.max_upper) {
-        return {RepetitionTokenClass::kRejected};
+        return {
+            may_exit_early ? RepetitionTokenClass::kUndecided : RepetitionTokenClass::kRejected
+        };
       }
     }
   }
@@ -269,9 +288,12 @@ RepetitionTokenClass ClassifyRepetitionToken(
     ++num_repetitions;
   }
   if (num_repetitions > follow_bytes.max_upper) {
-    return {RepetitionTokenClass::kRejected};
+    return {may_exit_early ? RepetitionTokenClass::kUndecided : RepetitionTokenClass::kRejected};
   }
-  return {RepetitionTokenClass::kBudget, num_repetitions};
+  return {
+      may_exit_early ? RepetitionTokenClass::kBudgetOrReplay : RepetitionTokenClass::kBudget,
+      num_repetitions
+  };
 }
 
 }  // namespace
@@ -299,12 +321,17 @@ void PopulateRepeatInteriorBitsets(
     // sorted-vocabulary order.
     std::map<int32_t, std::vector<int32_t>> tokens_by_repetitions;
     std::vector<int32_t> decided_indices;
+    std::vector<int32_t> budget_or_replay_indices;
     for (int32_t index = 0; index < static_cast<int32_t>(sorted_vocab.size()); ++index) {
       const auto token_class = ClassifyRepetitionToken(
           fsm, *counted_repetition_bodies[state.rule_id], sorted_vocab[index].second
       );
-      if (token_class.kind == RepetitionTokenClass::kBudget) {
+      if (token_class.kind == RepetitionTokenClass::kBudget ||
+          token_class.kind == RepetitionTokenClass::kBudgetOrReplay) {
         tokens_by_repetitions[token_class.num_repetitions].push_back(index);
+        if (token_class.kind == RepetitionTokenClass::kBudgetOrReplay) {
+          budget_or_replay_indices.push_back(index);
+        }
       } else if (token_class.kind == RepetitionTokenClass::kExit) {
         mask.repeat_exit_tokens.emplace_back(
             token_class.num_repetitions, sorted_vocab[index].first
@@ -359,6 +386,9 @@ void PopulateRepeatInteriorBitsets(
       IntsetDifference(&mask.accepted_indices, decided_indices);
     }
     IntsetDifference(&mask.uncertain_indices, decided_indices);
+    // The matcher skips uncertain tokens already accepted by the remaining-budget bitset.
+    // Keep overlapping delimiters here for the cases where they do not fit that bitset.
+    IntsetUnion(&mask.uncertain_indices, budget_or_replay_indices);
   }
 }
 

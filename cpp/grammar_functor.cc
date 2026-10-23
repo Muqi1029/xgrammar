@@ -2427,14 +2427,20 @@ int32_t RepetitionRangeExpanderImpl::HandleRepetitionRange(
   const auto repeated_expr = builder_->GetGrammarExpr(grammar_expr_id);
   bool counted = false;
   if (repeated_expr.type == GrammarBuilder::GrammarExprType::kCharacterClass &&
-      repeated_expr[0] != 0 && follow_byte_.has_value() && *follow_byte_ < 0x80 &&
-      !HasCharBudgetRules() && ((lower == 0 && upper != -1) || !HasLazyRules())) {
+      follow_byte_.has_value() && *follow_byte_ < 0x80 && !HasCharBudgetRules() &&
+      ((lower == 0 && upper != -1) || !HasLazyRules())) {
     bool excluded = false;
     for (int i = 1; i + 1 < repeated_expr.size(); i += 2) {
       excluded =
           excluded || (repeated_expr[i] <= *follow_byte_ && *follow_byte_ <= repeated_expr[i + 1]);
     }
-    counted = excluded;
+    // XML tool parameters use the full Unicode class. Its closing tag can also occur in
+    // the body. Tokens that fit the remaining count use the precomputed bitsets; tokens
+    // that might exit early keep an Earley replay fallback when they do not fit.
+    const bool bounded_xml_body = repeated_expr[0] == 0 && repeated_expr.size() == 3 &&
+                                  repeated_expr[1] == 0 && repeated_expr[2] == 0x10ffff &&
+                                  upper != -1;
+    counted = (repeated_expr[0] != 0 && excluded) || bounded_xml_body;
   }
   counted_repetition_ = counted;
 

@@ -63,6 +63,15 @@ int32_t XMLToolCallingConverter::FormatDeepSeekParamSuffix(
     if (value_rule_id < 0) {
       value_rule_id = CreateRule(schema, value_rule_name);
     }
+    // Keep a bounded raw string's repetition next to its closing tag. Hiding it behind
+    // a value-rule reference prevents the repetition optimizer from seeing the delimiter
+    // and forces the expensive unrolled expansion instead of a counted body.
+    const int32_t body_expr_id = builder_.GetRule(value_rule_id).body_expr_id;
+    const auto body_expr = builder_.GetGrammarExpr(body_expr_id);
+    if (*pinned_type == "string" && body_expr.type == GrammarBuilder::GrammarExprType::kRepeat &&
+        body_expr[2] >= 0) {
+      return wrap(body_expr_id, true);
+    }
     return wrap(RuleRef(value_rule_id), *pinned_type == "string");
   }
 
